@@ -1,10 +1,11 @@
 import argparse
-import itertools
 import json
 import os
+import random
 import shutil
 import tqdm
 
+import pandas as pd
 import zstd
 
 
@@ -33,7 +34,7 @@ class PrefixKeywordsCollector(object):
     def _prefix_match(self, text):
         for key in self.keywords:
         # return longest keywords match
-            if text.startswith(key):
+            if text.startswith(key) and (len(text) == len(key) or not(text[len(key)].isalpha())):
                 return key
         return None
 
@@ -44,8 +45,43 @@ class PrefixKeywordsCollector(object):
         for i, line in tqdm.tqdm(enumerate(lines), total=len(lines)):
             match = self._prefix_match(line)
             if match is not None:
-                result[match].append(lines[i - self.lcontext: i + self.rcontext + 1])
+                lcontext = '\n'.join(lines[i - self.lcontext : i])
+                rcontext = '\n'.join(lines[i + 1 : i + self.rcontext + 1])
+                result[match].append([lcontext, line, rcontext])
         return result
+
+
+class DatasetBuilder(object):
+    def __init__(self, max_samples=50*1000):
+        self.max_samples = max_samples
+        self.data = {}
+
+    def _filter_samples(self, samples):
+        return [sample for sample in samples if len(sample[0]) > 2 and all(s.isascii() for s in sample)]
+
+    def add_data(self, data_dict):
+        for key in data_dict:
+            if key not in self.data:
+                self.data[key] = []
+            new_samples = self._filter_samples(data_dict[key])
+            if len(self.data[key]) + len(new_samples) > self.max_samples:
+                self.data[key] = random.sample(self.data[key] + new_samples, self.max_samples)
+            else:
+                self.data[key].extend(new_samples)
+
+    def dump_data(self, filename, test_ratio=None):
+        columns = ['keyword', 'lcontext', 'line', 'rcontext']
+        data_iter = ([key] + sample for key, samples in self.data.items() for sample in samples)
+        df = pd.DataFrame(data_iter, columns=columns)
+        if test_ratio is not None:
+            assert 0.0 < test_ratio < 1.0, "Wrong test ratio value"
+            df_train = df.sample(frac = 1 - test_ratio, random_state=42)
+            df_test = df.drop(df_train.index)
+            df_train.to_csv(filename + '_train.csv', sep='\t', index=False)
+            df_test.to_csv(filename + '_test.csv', sep='\t', index=False)
+        else:
+            df = df.sample(frac=1, random_state=42)
+            df.to_csv(filename + '.csv', sep='\t')
 
 
 def load_lines(zst_json):
@@ -69,7 +105,7 @@ def load_keywords(txt_file):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', '-d', default='out')
-    parser.add_argument('--output_dir', '-o', default='keywords_found')
+    parser.add_argument('--output_dir', '-o', default='keywords_data')
     parser.add_argument('--keywords_file', '-k', required=True)
     args = parser.parse_args()
 
@@ -83,12 +119,15 @@ if __name__ == '__main__':
     print('Loading keywords...')
     keywords = load_keywords(args.keywords_file)
     keywords_collector = PrefixKeywordsCollector(keywords)
+    dataset_builder = DatasetBuilder()
 
     for data_file in os.listdir(args.data_dir):
+        if data_file != 'OS_11.json.zst':
+            continue
         print(f'Loading {data_file}...')
         lines = load_lines(os.path.join(args.data_dir, data_file))
         print(f'Collecting keywords for {data_file}...')
         collected = keywords_collector.collect(lines)
-        out_name = data_file.split('.')[0] + '_keywords.json'
-        with open(os.path.join(args.output_dir, out_name), 'w') as fout:
-            json.dump(collected, fout, sort_keys=True, indent=4)
+        dataset_builder.add_data(collected)
+    
+    dataset_builder.dump_data(os.path.join(args.output_dir, 'keywords'), test_ratio=0.1)
