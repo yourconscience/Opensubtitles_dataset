@@ -122,8 +122,6 @@ if __name__ == '__main__':
     dataset_builder = DatasetBuilder()
 
     for data_file in os.listdir(args.data_dir):
-        if data_file != 'OS_11.json.zst':
-            continue
         print(f'Loading {data_file}...')
         lines = load_lines(os.path.join(args.data_dir, data_file))
         print(f'Collecting keywords for {data_file}...')
