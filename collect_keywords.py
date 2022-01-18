@@ -14,7 +14,7 @@ class Preprocessor(object):
         pass
 
     def process(self, text):
-        return text.lower().strip()
+        return text.lower().strip().replace('’', "'")
 
 
 class PrefixKeywordsCollector(object):
