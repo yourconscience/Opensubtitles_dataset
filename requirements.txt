@@ -2,3 +2,4 @@ zstd
 requests
 tqdm
 bs4
+pandas
